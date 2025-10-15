@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mobile Pedometer — Steps, Distance & Weather</title>
+<style>
+  :root{
+    --bg:#08121a;
+    --card:#0f2b3a;
+    --accent:#00d1ff;
+    --muted:#9fb9c6;
+    --glass: rgba(255,255,255,0.03);
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{
+    background: linear-gradient(180deg,var(--bg) 0%, #03151a 100%);
+    color: #e6f7fb;
+    display:flex;
+    align-items:flex-start;
+    justify-content:center;
+    padding:18px;
+  }
+  .app{width:100%;max-width:420px;}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+  header h1{font-size:1.1rem;margin:0}
+  .card{
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:14px;
+    padding:14px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    margin-bottom:12px;
+    border: 1px solid rgba(255,255,255,0.03);
+  }
+  .pedometer{display:flex;align-items:center;justify-content:space-between;}
+  .metrics{display:flex;flex-direction:column;gap:10px;}
+  .big{font-size:2.4rem;font-weight:700;letter-spacing:-0.02em;}
+  .small{color:var(--muted);font-size:0.9rem;}
+  .controls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  button{
+    background:var(--accent);
+    color:#002028;
+    border:none;
+    padding:10px 12px;
+    border-radius:10px;
+    font-weight:600;
+    box-shadow:0 6px 18px rgba(0,0,0,0.25);
+  }
+  button.ghost{
+    background:transparent;
+    color:var(--muted);
+    border:1px solid rgba(255,255,255,0.04);
+  }
+  .info-row{display:flex;justify-content:space-between;gap:8px;align-items:center;}
+  .muted{color:var(--muted);font-size:0.95rem;}
+  .weather{display:flex;gap:12px;align-items:center;}
+  .weather .icon{
+    width:56px;height:56px;border-radius:10px;background:var(--glass);display:flex;align-items:center;justify-content:center;font-size:1.2rem;
+  }
+  footer{margin-top:12px;text-align:center;color:var(--muted);font-size:0.85rem}
+  @media(min-width:760px){body{padding:30px}header h1{font-size:1.3rem}}
+</style>
+</head>
+<body>
+  <div class="app" role="application">
+    <header>
+      <div>
+        <h1>🚶 Mobile Pedometer</h1>
+        <div class="muted">Steps · Distance · Weather · Location</div>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="pedometer">
+        <div class="metrics">
+          <div><div class="small">Total Steps</div><div id="steps" class="big">0</div></div>
+          <div><div class="small">Estimated Distance</div><div id="distance" class="big">0 m</div></div>
+        </div>
+        <div style="min-width:90px;text-align:right">
+          <div class="small">Stride (m)</div>
+          <input type="number" id="strideInput" value="0.78" step="0.01" min="0.4" style="width:72px;padding:8px;border-radius:8px;border:none;background:rgba(255,255,255,0.02);color:inherit;font-weight:600">
+          <div class="small" style="margin-top:6px;color:var(--muted)">Adjust stride</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn">Start</button>
+        <button class="ghost" id="resetBtn">Reset</button>
+        <button class="ghost" id="permBtn">Permissions</button>
+      </div>
+      <div class="info-row" style="margin-top:12px">
+        <div><div class="small">Status</div><div id="status" class="muted">Stopped</div></div>
+        <div><div class="small">Session</div><div id="sessionSteps" class="muted">0</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div class="small">Location</div>
+          <div id="locName" style="font-weight:700">—</div>
+          <div id="coords" class="muted">lat: — , lon: —</div>
+        </div>
+        <div class="weather">
+          <div class="icon" id="weatherIcon">☀️</div>
+          <div>
+            <div class="small">Weather</div>
+            <div id="weatherMain" style="font-weight:700">—</div>
+            <div id="weatherTemp" class="muted">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:12px">Auto updates every 5 minutes.</div>
+    </section>
+
+    <footer>Made with Web APIs — DeviceMotion / Geolocation / Open-Meteo</footer>
+  </div>
+
+<script>
+// --- Basic setup ---
+const stepsEl=document.getElementById('steps');
+const distanceEl=document.getElementById('distance');
+const strideInput=document.getElementById('strideInput');
+const startBtn=document.getElementById('startBtn');
+const resetBtn=document.getElementById('resetBtn');
+const permBtn=document.getElementById('permBtn');
+const statusEl=document.getElementById('status');
+const sessionStepsEl=document.getElementById('sessionSteps');
+const locNameEl=document.getElementById('locName');
+const coordsEl=document.getElementById('coords');
+const weatherMainEl=document.getElementById('weatherMain');
+const weatherTempEl=document.getElementById('weatherTemp');
+const weatherIconEl=document.getElementById('weatherIcon');
+
+let totalSteps=Number(localStorage.getItem('pedometer_steps')||0);
+let sessionSteps=0,tracking=false;
+let gravity=0,lastStepTime=0;
+const alpha=0.9,STEP_THRESHOLD=1.05,STEP_COOLDOWN=350;
+let accSensor=null,geoWatchId=null;
+const WEATHER_POLL_MS=5*60*1000;
+
+function refreshUI(){
+  stepsEl.textContent=totalSteps;
+  sessionStepsEl.textContent=sessionSteps;
+  const stride=parseFloat(strideInput.value)||0.78;
+  const meters=totalSteps*stride;
+  distanceEl.textContent=meters>=1000?(meters/1000).toFixed(2)+' km':Math.round(meters)+' m';
+}
+function saveSteps(){localStorage.setItem('pedometer_steps',totalSteps);}
+function registerStep(){
+  const now=Date.now();
+  if(now-lastStepTime<STEP_COOLDOWN)return;
+  lastStepTime=now;totalSteps++;sessionSteps++;saveSteps();refreshUI();
+}
+
+// --- Sensor handling ---
+function handleAcceleration(x,y,z){
+  const mag=Math.sqrt(x*x+y*y+z*z);
+  gravity=alpha*gravity+(1-alpha)*mag;
+  const lin=Math.abs(mag-gravity);
+  if(lin>STEP_THRESHOLD)registerStep();
+}
+function deviceMotionHandler(e){
+  const a=e.accelerationIncludingGravity;if(!a)return;
+  handleAcceleration(a.x||0,a.y||0,a.z||0);
+}
+function startSensors(){
+  if('Accelerometer'in window){
+    try{
+      accSensor=new Accelerometer({frequency:50});
+      accSensor.addEventListener('reading',()=>handleAcceleration(accSensor.x,accSensor.y,accSensor.z));
+      accSensor.start();
+      statusEl.textContent='Tracking (sensor)';
+    }catch(e){window.addEventListener('devicemotion',deviceMotionHandler);statusEl.textContent='Tracking (motion)';}
+  }else if('DeviceMotionEvent'in window){
+    window.addEventListener('devicemotion',deviceMotionHandler);
+    statusEl.textContent='Tracking (motion)';
+  }else{statusEl.textContent='Not supported';}
+}
+function stopSensors(){
+  if(accSensor){accSensor.stop();accSensor=null;}
+  window.removeEventListener('devicemotion',deviceMotionHandler);
+}
+
+// --- Buttons ---
+startBtn.onclick=async()=>{
+  if(tracking){tracking=false;stopSensors();startBtn.textContent='Start';statusEl.textContent='Stopped';}
+  else{tracking=true;startBtn.textContent='Stop';statusEl.textContent='Starting...';await startSensors();}
+};
+resetBtn.onclick=()=>{totalSteps=0;sessionSteps=0;saveSteps();refreshUI();};
+permBtn.onclick=()=>navigator.geolocation.getCurrentPosition(p=>{updateLocation(p.coords.latitude,p.coords.longitude);fetchWeather(p.coords.latitude,p.coords.longitude);});
+
+// --- Location & Weather ---
+function updateLocation(lat,lon){
+  coordsEl.textContent=`lat: ${lat.toFixed(4)} , lon: ${lon.toFixed(4)}`;
+  locNameEl.textContent='Loading...';
+}
+async function fetchWeather(lat,lon){
+  try{
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+    const res=await fetch(url);
+    const data=await res.json();
+    const w=data.current_weather;
+    if(w){
+      weatherMainEl.textContent=`${w.weathercode<3?'Clear':w.weathercode<60?'Cloudy':'Rainy'}`;
+      weatherTempEl.textContent=`${w.temperature}°C`;
+      weatherIconEl.textContent=w.weathercode<3?'☀️':w.weathercode<60?'☁️':'🌧️';
+      locNameEl.textContent=data.timezone_abbreviation||'Local';
+    }
+  }catch(err){weatherMainEl.textContent='N/A';weatherTempEl.textContent='—';}
+}
+function startGeo(){
+  if(!navigator.geolocation){coordsEl.textContent='No GPS';return;}
+  navigator.geolocation.getCurrentPosition(pos=>{
+    updateLocation(pos.coords.latitude,pos.coords.longitude);
+    fetchWeather(pos.coords.latitude,pos.coords.longitude);
+  });
+  geoWatchId=navigator.geolocation.watchPosition(pos=>{
+    updateLocation(pos.coords.latitude,pos.coords.longitude);
+  });
+}
+startGeo();
+setInterval(()=>{const t=coordsEl.textContent.match(/lat:\s*([0-9.\-]+).*lon:\s*([0-9.\-]+)/);if(t){fetchWeather(+t[1],+t[2]);}},WEATHER_POLL_MS);
+setInterval(refreshUI,1000);
+window.addEventListener('pagehide',()=>{stopSensors();if(geoWatchId)navigator.geolocation.clearWatch(geoWatchId);});
+refreshUI();
+</script>
+</body>
+</html>
